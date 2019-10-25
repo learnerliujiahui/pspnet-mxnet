@@ -98,10 +98,9 @@ def SGD(params, lr, batch_size):
 
 
 def try_all_gpus():
-# 本函数已保存在d2lzh包中方便以后使用
     ctxes = []
     try:
-        for i in range(16):
+        for i in range(4):
             # 假设一台机器上GPU的数量不超过16
             ctx = mx.gpu(i)
             _ = nd.array([0], ctx=ctx)
@@ -117,12 +116,12 @@ def _get_batch(batch, ctx):
     if labels.dtype != features.dtype:
         labels = labels.astype(features.dtype)
     return (split_and_load(features, ctx),
-            split_and_load(labels, ctx), features.shape[0])
+            split_and_load(labels, ctx),
+            features.shape[0])
 
 def split_and_load(data, ctx):
     n, k = data.shape[0], len(ctx)
     m = n // k
-    # 简单起⻅,假设可以整除
     assert m * k == n, '# examples is not divided by # devices.'
     return [data[i * m: (i + 1) * m].as_in_context(ctx[i]) for i in range(k)]
 
@@ -143,8 +142,10 @@ def evaluate_accuracy(data_iter, net, ctx=[mx.cpu()]):
 
 def train(train_iter, test_iter, net, loss, trainer, ctx, num_epochs):
     print('training on', ctx)
+
     if isinstance(ctx, mx.Context):
         ctx = [ctx]
+
     for epoch in range(num_epochs):
         train_l_sum, train_acc_sum, n, m, start = 0.0, 0.0, 0, 0, time.time()
         for i, batch in enumerate(train_iter):
@@ -196,24 +197,20 @@ def RandomCrop(data, label, height, width):
 
 
 
-classes = ['__background__', 'aeroplane', 'bicycle', 'bird', 'boat',
-           'bottle', 'bus', 'car', 'cat', 'chair', 'cow', 'diningtable',
-            'dog', 'horse', 'motorbike', 'person', 'pottedplant',
-            'sheep', 'sofa', 'train', 'tvmonitor']
 
-colormap = [[0, 0, 0], [128, 0, 0], [0, 128, 0], [128, 128, 0],
-            [0, 0, 128], [128, 0, 128], [0, 128, 128], [128, 128, 128],
-            [64, 0, 0], [192, 0, 0], [64, 128, 0], [192, 128, 0],
-            [64, 0, 128], [192, 0, 128], [64, 128, 128], [192, 128, 128],
-            [0, 64, 0], [128, 64, 0], [0, 192, 0], [128, 192, 0], [0, 64, 128]]
+# using bilinear kernel initialize conv2dtranspose
+def bilinear_kernel(in_channels, out_channels, kernel_size):
+    factor = (kernel_size + 1) // 2
+    if kernel_size % 2 == 1:
+        center = factor - 1
+    else:
+        center = factor - 0.5
+    og = np.ogrid[:kernel_size, :kernel_size]
+    filt = (1 - abs(og[0] - center) / factor) * (1 - abs(og[1] - center) / factor)
+    weight = np.zeros((in_channels, out_channels, kernel_size, kernel_size), dtype='float32')
+    weight[range(in_channels), range(out_channels), :, :] = filt
+    return nd.array(weight)
 
-assert len(classes) == len(colormap)
 
-cm2lbl = np.zeros(256**3)
-for i, cm in enumerate(colormap):
-    cm2lbl[(cm[0]*256 + cm[1])*256 + cm[2]] = i
-
-def image2label(img):
-    data = img.astype('int32').asnumpy()
-    idx = (data[:, :, 0]*256 + data[:, :, 1]*256 + data[:,:,2])
-    return nd.array(cm2lbl[idx])
+def lr_poly(base_lr, iter_, max_iter=100, power=0.9):
+    return base_lr * ((1 - float(iter_) / max_iter) ** power)
